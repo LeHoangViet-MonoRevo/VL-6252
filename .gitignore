@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ignore the data in data_prod folder since it is too large
+data_prod/
+
+# Trivials
+*.csv
+*.sql
