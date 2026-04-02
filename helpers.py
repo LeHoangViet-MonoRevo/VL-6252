@@ -39,6 +39,80 @@ def normalize_datetime_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFram
     return df
 
 
+def subtract_weekend_hours(start, end):
+    """Return gap in hours, excluding Saturday and Sunday hours."""
+    if pd.isna(start) or pd.isna(end) or end <= start:
+        return 0.0
+
+    total_hours = (end - start).total_seconds() / 3600
+
+    # Count weekend hours in the interval
+    weekend_hours = 0.0
+    cursor = start
+
+    while cursor < end:
+        next_day = (cursor + pd.Timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        next_day = min(next_day, end)
+        if cursor.weekday() >= 5:  # 5=Saturday, 6=Sunday
+            weekend_hours += (next_day - cursor).total_seconds() / 3600
+        cursor = next_day
+
+    return total_hours - weekend_hours
+
+
+def filter1(sub: pd.DataFrame):
+    mask_duration = sub["start_at_planning"] != sub["end_at_planning"]
+    print(f"Filter 1 — duration = 0: removed {(~mask_duration).sum():,} rows")
+    sub = sub[mask_duration].copy()
+    return sub
+
+
+def filter2(sub: pd.DataFrame):
+    lot_unique_starts = sub.groupby("production_lot_id")["start_at_planning"].nunique()
+    valid_lots = lot_unique_starts[lot_unique_starts > 1].index
+    removed_lots = sub["production_lot_id"].nunique() - len(valid_lots)
+    removed_rows = (~sub["production_lot_id"].isin(valid_lots)).sum()
+    print(
+        f"Filter 2 — all same start: removed {removed_lots:,} lots / {removed_rows:,} rows"
+    )
+    sub = sub[sub["production_lot_id"].isin(valid_lots)].copy()
+
+    print()
+    print("=== AFTER FILTER 1 & 2 ===")
+    print(f"Rows:  {len(sub):,}")
+    print(f'Lots:  {sub["production_lot_id"].nunique():,}')
+    print()
+
+    # Sort by lot then by sequence (sequence defines the true order within a lot)
+    sub = sub.sort_values(["production_lot_id", "sequence_planning"]).reset_index(
+        drop=True
+    )
+
+    # Shift within each lot — consecutive rows after sort = consecutive sequences
+    # Note: sequence may not be contiguous (e.g. 2, 6) but sort order is still correct
+    sub["prev_end"] = sub.groupby("production_lot_id")["end_at_planning"].shift(1)
+    sub["prev_sequence"] = sub.groupby("production_lot_id")["sequence_planning"].shift(
+        1
+    )
+
+    # Gap = start of current step - end of previous step (in hours)
+    sub["gap_hours"] = (
+        sub["start_at_planning"] - sub["prev_end"]
+    ).dt.total_seconds() / 3600
+
+    # Drop the first step of each lot (no previous step to compare)
+    gaps = sub.dropna(subset=["gap_hours", "prev_end"]).copy()
+
+    print(f"Total gaps (before overlap removal): {len(gaps):,}")
+    print(f'  overlap (< 0h):  {(gaps["gap_hours"] < 0).sum():,}')
+    print(f'  zero   (= 0h):   {(gaps["gap_hours"] == 0).sum():,}')
+    print(f'  positive (> 0h): {(gaps["gap_hours"] > 0).sum():,}')
+    print()
+    return sub, gaps
+
+
 def build_model(model_type):
     if model_type == "xgboost":
         return xgb.XGBClassifier(
