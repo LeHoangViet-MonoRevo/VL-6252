@@ -7,7 +7,6 @@ from data_loader import load_raw, merge_planning_with_lots
 def run():
     lots, planning = load_raw()
     df_raw = merge_planning_with_lots(planning, lots)
-    df_raw.to_csv("planning_with_production_lot.csv", index=False)
 
     sub, gaps = clean(df_raw)
 
